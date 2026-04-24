@@ -20,7 +20,7 @@ echo -e "${BOLD}Installing $BINARY_NAME...${NC}"
 if ! command -v curl &>/dev/null; then
     echo -e "${ORANGE}✖ Error: curl is required but not installed.${NC}"
     echo -ne "Would you like to attempt to install curl now? (y/n): "
-    read -n 1 -r
+    read -n 1 -r < /dev/tty
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -84,7 +84,7 @@ if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
     echo -e "${ORANGE}${BOLD}⚠ Update detected:${NC}"
     echo -e "$BINARY_NAME is already installed at $INSTALL_DIR/$BINARY_NAME"
     echo -ne "Create a backup before updating? (y/n): "
-    read -n 1 -r
+    read -n 1 -r < /dev/tty
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -93,7 +93,10 @@ if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
         else
             echo -e "${ORANGE}⚠ Warning: Failed to create backup.${NC}"
         fi
+    else
+        echo -e "Skipping backup."
     fi
+    echo -e "Proceeding with update..."
 fi
 
 # 3. Download the script

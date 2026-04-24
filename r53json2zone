@@ -37,7 +37,7 @@ check_dependencies() {
     if [ ${#missing_deps[@]} -gt 0 ]; then
         echo -e "${ORANGE}${BOLD}⚠ MISSING DEPENDENCIES:${NC} ${missing_deps[*]}"
         echo -ne "Would you like to attempt to install them now? (y/n): "
-        read -n 1 -r
+        read -n 1 -r < /dev/tty
         echo ""
 
         if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -188,7 +188,7 @@ check_updates_manual() {
         echo -e "Your version:   ${ACTUAL_HASH:0:12}... ($INSTALL_DATE)"
         echo -e "Latest version: ${EXPECTED_HASH:0:12}... ($LATEST_DATE)"
         echo -ne "\nUpdate now? (y/n): "
-        read -n 1 -r
+        read -n 1 -r < /dev/tty
         echo ""
 
         if [[ $REPLY =~ ^[Yy]$ ]]; then
