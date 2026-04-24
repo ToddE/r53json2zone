@@ -164,7 +164,8 @@ EOF
     echo "$INFO_TEXT"
 
     # File generation prompt
-    INFO_FILENAME="info-$OUTPUT_FILE"
+    OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
+    INFO_FILENAME="$OUTPUT_DIR/info-$(basename "$OUTPUT_FILE")"
     echo -ne "Would you like to save this guide to ${BOLD}$INFO_FILENAME${NC}? (y/n): "
     read -n 1 -r
     echo ""
