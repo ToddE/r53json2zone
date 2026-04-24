@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 
 # Script name:  r53json2zone
-# Version:      1.0.1
+# Version:      1.0.1b
 #
 # Description:  Converts AWS Route 53 JSON exports to a standard BIND zone
 #               file compatible with any DNS provider. AWS Alias records are
