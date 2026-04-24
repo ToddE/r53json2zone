@@ -18,7 +18,9 @@ jobs:
 
       - name: Compute and update SHA256SUMS
         run: |
-          sha256sum r53json2zone > SHA256SUMS
+          HASH=$(sha256sum r53json2zone | awk '{print $1}')
+          DATE=$(date +%Y-%m-%d)
+          echo "$HASH $DATE r53json2zone" > SHA256SUMS
 
       - name: Commit changes
         run: |

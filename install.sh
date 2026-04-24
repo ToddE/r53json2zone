@@ -79,14 +79,31 @@ if [ ! -d "$INSTALL_DIR" ]; then
     fi
 fi
 
-# 2. Download the script
+# 2. Check if already installed and offer backup
+if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+    echo -e "${ORANGE}${BOLD}⚠ Update detected:${NC}"
+    echo -e "$BINARY_NAME is already installed at $INSTALL_DIR/$BINARY_NAME"
+    echo -ne "Create a backup before updating? (y/n): "
+    read -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if cp "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.bak"; then
+            echo -e "${GREEN}✔${NC} Backup created: ${BOLD}$INSTALL_DIR/$BINARY_NAME.bak${NC}"
+        else
+            echo -e "${ORANGE}⚠ Warning: Failed to create backup.${NC}"
+        fi
+    fi
+fi
+
+# 3. Download the script
 if ! curl -sSL "$REPO_URL" -o "$INSTALL_DIR/$BINARY_NAME"; then
     echo -e "${ORANGE}✖ Error: Failed to download script from GitHub.${NC}"
     echo -e "Check your internet connection and try again."
     exit 1
 fi
 
-# 3. Validate downloaded file
+# 4. Validate downloaded file
 if [ ! -s "$INSTALL_DIR/$BINARY_NAME" ]; then
     echo -e "${ORANGE}✖ Error: Downloaded file is empty or missing.${NC}"
     rm -f "$INSTALL_DIR/$BINARY_NAME"
@@ -100,15 +117,16 @@ if ! head -1 "$INSTALL_DIR/$BINARY_NAME" | grep -q "^#!/.*bash"; then
     exit 1
 fi
 
-# 3b. Download and validate against SHA256SUMS
+# 5. Download and validate against SHA256SUMS
 echo -e "Validating file integrity..."
 TEMP_SUMS=$(mktemp)
 if ! curl -sSL "$SUMS_URL" -o "$TEMP_SUMS"; then
     echo -e "${ORANGE}⚠ Warning: Could not download SHA256SUMS for validation.${NC}"
     rm -f "$TEMP_SUMS"
 else
-    # Extract expected hash for r53json2zone
-    EXPECTED_HASH=$(grep "^[a-f0-9]* " "$TEMP_SUMS" | grep " $BINARY_NAME$" | awk '{print $1}')
+    # Extract expected hash for r53json2zone (hash is first field)
+    SUMS_LINE=$(grep " $BINARY_NAME$" "$TEMP_SUMS")
+    EXPECTED_HASH=$(echo "$SUMS_LINE" | awk '{print $1}')
 
     if [ -z "$EXPECTED_HASH" ]; then
         echo -e "${ORANGE}⚠ Warning: Could not find hash in SHA256SUMS.${NC}"
@@ -139,7 +157,7 @@ else
     rm -f "$TEMP_SUMS"
 fi
 
-# 4. Make the script executable
+# 6. Make the script executable
 if ! chmod +x "$INSTALL_DIR/$BINARY_NAME"; then
     echo -e "${ORANGE}✖ Error: Failed to make script executable.${NC}"
     echo -e "Check file permissions in $INSTALL_DIR"
@@ -148,7 +166,7 @@ fi
 
 echo -e "${GREEN}✔${NC} ${BOLD}Download complete:${NC} $INSTALL_DIR/$BINARY_NAME"
 
-# 5. Verify PATH configuration
+# 7. Verify PATH configuration
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "\n${ORANGE}${BOLD}⚠ PATH WARNING:${NC}"
     echo -e "The directory $INSTALL_DIR is NOT in your PATH."

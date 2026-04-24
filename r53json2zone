@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 # --- CONFIGURATION ---
 R53JSONFILE=$1
 OUTPUT_FILE=$2
-DEPENDENCIES=("jq")
+DEPENDENCIES=("jq" "curl")
 
 # --- FUNCTIONS ---
 
@@ -90,17 +90,143 @@ check_dependencies() {
     fi
 }
 
+# Check for updates (runs in background once per day)
+check_updates_background() {
+    CACHE_DIR="$HOME/.cache/r53json2zone"
+    LAST_CHECK_FILE="$CACHE_DIR/last-update-check"
+
+    # Create cache dir if needed
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return
+
+    # Check if we've already checked today
+    if [ -f "$LAST_CHECK_FILE" ]; then
+        LAST_CHECK=$(cat "$LAST_CHECK_FILE" 2>/dev/null)
+        NOW=$(date +%s)
+        DIFF=$((NOW - LAST_CHECK))
+        if [ "$DIFF" -lt 86400 ]; then
+            return  # Skip check, less than 24 hours
+        fi
+    fi
+
+    # Run update check in background with 4 second timeout
+    (
+        SUMS_URL="https://raw.githubusercontent.com/ToddE/r53json2zone/main/SHA256SUMS"
+        TEMP_SUMS=$(mktemp)
+
+        if ! timeout 4 curl -sSL "$SUMS_URL" -o "$TEMP_SUMS" 2>/dev/null; then
+            rm -f "$TEMP_SUMS"
+            return
+        fi
+
+        SUMS_LINE=$(grep " r53json2zone$" "$TEMP_SUMS")
+        rm -f "$TEMP_SUMS"
+
+        if [ -z "$SUMS_LINE" ]; then
+            return
+        fi
+
+        EXPECTED_HASH=$(echo "$SUMS_LINE" | awk '{print $1}')
+        LATEST_DATE=$(echo "$SUMS_LINE" | awk '{print $2}')
+
+        if command -v sha256sum &>/dev/null; then
+            ACTUAL_HASH=$(sha256sum "$0" | awk '{print $1}')
+        elif command -v shasum &>/dev/null; then
+            ACTUAL_HASH=$(shasum -a 256 "$0" | awk '{print $1}')
+        else
+            return
+        fi
+
+        if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+            INSTALL_DATE=$(date -r "$0" +%Y-%m-%d 2>/dev/null || echo "unknown")
+            echo -e "${ORANGE}${BOLD}⚠ Update available${NC}"
+            echo -e "Your version:   ${ACTUAL_HASH:0:12}... ($INSTALL_DATE)"
+            echo -e "Latest version: ${EXPECTED_HASH:0:12}... ($LATEST_DATE)"
+            echo -e "Run: ${BOLD}r53json2zone --check-updates${NC} to update"
+        fi
+
+        # Update last check timestamp
+        date +%s > "$LAST_CHECK_FILE"
+    ) &
+}
+
+# Check for updates (manual flag)
+check_updates_manual() {
+    echo "Checking for updates..."
+
+    SUMS_URL="https://raw.githubusercontent.com/ToddE/r53json2zone/main/SHA256SUMS"
+    TEMP_SUMS=$(mktemp)
+
+    if ! timeout 4 curl -sSL "$SUMS_URL" -o "$TEMP_SUMS" 2>/dev/null; then
+        echo -e "${ORANGE}Could not check for updates.${NC}"
+        rm -f "$TEMP_SUMS"
+        return
+    fi
+
+    SUMS_LINE=$(grep " r53json2zone$" "$TEMP_SUMS")
+    rm -f "$TEMP_SUMS"
+
+    if [ -z "$SUMS_LINE" ]; then
+        echo -e "${ORANGE}Could not find version info.${NC}"
+        return
+    fi
+
+    EXPECTED_HASH=$(echo "$SUMS_LINE" | awk '{print $1}')
+    LATEST_DATE=$(echo "$SUMS_LINE" | awk '{print $2}')
+
+    if command -v sha256sum &>/dev/null; then
+        ACTUAL_HASH=$(sha256sum "$0" | awk '{print $1}')
+    elif command -v shasum &>/dev/null; then
+        ACTUAL_HASH=$(shasum -a 256 "$0" | awk '{print $1}')
+    else
+        echo -e "${ORANGE}sha256sum/shasum not available.${NC}"
+        return
+    fi
+
+    if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+        INSTALL_DATE=$(date -r "$0" +%Y-%m-%d 2>/dev/null || echo "unknown")
+        echo -e "${ORANGE}${BOLD}⚠ Update available${NC}"
+        echo -e "Your version:   ${ACTUAL_HASH:0:12}... ($INSTALL_DATE)"
+        echo -e "Latest version: ${EXPECTED_HASH:0:12}... ($LATEST_DATE)"
+        echo -ne "\nUpdate now? (y/n): "
+        read -n 1 -r
+        echo ""
+
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "Updating..."
+            if curl -sSL https://raw.githubusercontent.com/ToddE/r53json2zone/main/install.sh | bash; then
+                echo -e "${GREEN}✔${NC} Update completed successfully"
+            else
+                echo -e "${ORANGE}✖ Error: Update failed${NC}"
+                exit 1
+            fi
+        fi
+    else
+        INSTALL_DATE=$(date -r "$0" +%Y-%m-%d 2>/dev/null || echo "unknown")
+        echo -e "${GREEN}✔${NC} Up to date ($INSTALL_DATE)"
+    fi
+}
+
 # --- MAIN EXECUTION ---
 
-# 1. Pre-flight checks
+# 1. Handle special flags
+if [ "$#" -eq 1 ] && [ "$1" = "--check-updates" ]; then
+    check_updates_manual
+    exit 0
+fi
+
+# 2. Pre-flight checks
 if [ "$#" -lt 2 ]; then
     echo -e "${ORANGE}${BOLD}Usage:${NC} $(basename -- "$0") <route53_json_filename> <output_filename>"
+    echo -e "       $(basename -- "$0") --check-updates"
     exit 1
 fi
 
 check_dependencies "${DEPENDENCIES[@]}"
 
-# 2. Generate the BIND Zone File
+# Check for updates in background (once per day)
+check_updates_background
+
+# 3. Generate the BIND Zone File
 # Logic: Collapses A/AAAA Alias pairs into one CNAME.
 jq -r '
   .ResourceRecordSets
@@ -117,7 +243,7 @@ jq -r '
 
 echo -e "${GREEN}✔${NC} ${BOLD}Zone file created:${NC} $OUTPUT_FILE"
 
-# 3. Detect Unusual Circumstances (Advanced Routing, Health Checks, or Aliases)
+# 4. Detect Unusual Circumstances (Advanced Routing, Health Checks, or Aliases)
 ALIAS_RECORDS=$(jq -r '.ResourceRecordSets[] | select(.AliasTarget) | "- " + .Name + " -> CNAME to: " + .AliasTarget.DNSName' "$R53JSONFILE" | sort -u)
 ADVANCED_LOGIC=$(jq -r '.ResourceRecordSets[] | select(.Weight or .Region or .GeoLocation or .MultiValueAnswer or .HealthCheckId) | "- " + .Name + " (" + .Type + ") uses AWS Advanced Routing/Health Checks"' "$R53JSONFILE" | sort -u)
 

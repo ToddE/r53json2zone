@@ -13,6 +13,7 @@ A bash script that converts AWS Route 53 JSON exports to standard BIND zone file
 ## Requirements
 
 - **bash** — the shell (included on Linux/macOS)
+- **curl** — for downloading the script and checking for updates. The installer will automatically install it if you don't have it.
 - **jq** — a JSON parsing tool. The installer will automatically install it if you don't have it.
 - **AWS CLI** — needed to export your Route 53 records. You must have it installed and configured with AWS credentials that can access Route 53. See [AWS CLI setup docs](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
 
@@ -77,8 +78,29 @@ r53json2zone records.json example.com.zone
 Replace `example.com.zone` with whatever name you want for the output file. This will create a zone file you can import into your new DNS provider.
 
 **What you get:**
-- `example.com.zone` — the zone file to import
-- `info-example.com.zone` — (if applicable) a guide with migration notes
+- `example.com.zone` — the zone file to import (in the same directory as specified)
+- `info-example.com.zone` — (if applicable) a guide with migration notes (same directory as the zone file)
+
+### Updates
+
+The script automatically checks for updates once per day (when you run it normally). If a newer version is available, you'll see a message:
+
+```
+⚠ Update available
+Your version:   abc123456789... (2026-04-20)
+Latest version: def456789012... (2026-04-24)
+Run: curl -sSL https://raw.githubusercontent.com/ToddE/r53json2zone/main/install.sh | bash
+```
+
+To check for updates manually and update if needed:
+
+```bash
+r53json2zone --check-updates
+```
+
+This will show you the version info and ask if you want to update now. Just answer `y` to install the latest version, or `n` to skip.
+
+The auto-check runs in the background with a 4-second timeout, so it won't slow down your DNS conversions. When it finds an update, it'll suggest running `r53json2zone --check-updates` to install.
 
 ## What to do next
 
