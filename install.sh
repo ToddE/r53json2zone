@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#
+# Version: 20260424a
 # Install script for r53json2zone
 # Usage: curl -sSL https://raw.githubusercontent.com/ToddE/r53json2zone/main/install.sh | bash
 
