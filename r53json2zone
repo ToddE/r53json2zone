@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# 
+# Script name:  r53json2zone
+# Version:      1.0.0
+#
+# Description:  Converts AWS Route 53 JSON exports to a standard BIND zone
+#               file compatible with any DNS provider. AWS Alias records are
+#               converted to CNAMEs. When detected, a Cloudflare-specific
+#               migration guide is generated for advanced routing features.
+#
+# Author:       Todd Emerson (todd+github@toddemerson.com)
+#
+# License: MIT
+
+# --- COLOR DEFINITIONS ---
+ORANGE='\033[1;38;5;208m'
+GREEN='\033[1;32m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# --- CONFIGURATION ---
+R53JSONFILE=$1
+OUTPUT_FILE=$2
+DEPENDENCIES=("jq")
+
+# --- FUNCTIONS ---
+
+# Function to check and install missing dependencies
+check_dependencies() {
+    local missing_deps=()
+    for dep in "$@"; do
+        if ! command -v "$dep" &> /dev/null; then
+            missing_deps+=("$dep")
+        fi
+    done
+
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${ORANGE}${BOLD}⚠ MISSING DEPENDENCIES:${NC} ${missing_deps[*]}"
+        echo -ne "Would you like to attempt to install them now? (y/n): "
+        read -n 1 -r
+        echo ""
+
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                OS="darwin"
+                NAME="macOS"
+            elif [ -f /etc/os-release ]; then
+                . /etc/os-release
+                OS=$ID
+            else
+                echo -e "${ORANGE}Unable to detect OS distribution. Please install ${missing_deps[*]} manually.${NC}"
+                exit 1
+            fi
+
+            echo -e "Detected: ${BOLD}$NAME${NC}. Preparing installation..."
+
+            case "$OS" in
+                ubuntu|debian|raspbian|armbian|linuxmint)
+                    sudo apt update && sudo apt install -y "${missing_deps[@]}"
+                    ;;
+                centos|rhel|fedora)
+                    sudo dnf install -y "${missing_deps[@]}" || sudo yum install -y "${missing_deps[@]}"
+                    ;;
+                arch)
+                    sudo pacman -S --noconfirm "${missing_deps[@]}"
+                    ;;
+                darwin)
+                    if ! command -v brew &>/dev/null; then
+                        echo -e "${ORANGE}Homebrew not found. Install it from https://brew.sh, then run: brew install ${missing_deps[*]}${NC}"
+                        exit 1
+                    fi
+                    brew install "${missing_deps[@]}"
+                    ;;
+                *)
+                    echo -e "${ORANGE}Unsupported distribution: $OS. Please install ${missing_deps[*]} manually.${NC}"
+                    exit 1
+                    ;;
+            esac
+
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✔${NC} ${BOLD}Dependencies installed successfully!${NC}"
+            else
+                echo -e "${ORANGE}Installation failed. Check permissions or internet connection.${NC}"
+                exit 1
+            fi
+        else
+            echo -e "${ORANGE}Script cannot continue without: ${missing_deps[*]}${NC}"
+            exit 1
+        fi
+    fi
+}
+
+# --- MAIN EXECUTION ---
+
+# 1. Pre-flight checks
+if [ "$#" -lt 2 ]; then
+    echo -e "${ORANGE}${BOLD}Usage:${NC} $(basename -- "$0") <route53_json_filename> <output_filename>"
+    exit 1
+fi
+
+check_dependencies "${DEPENDENCIES[@]}"
+
+# 2. Generate the BIND Zone File
+# Logic: Collapses A/AAAA Alias pairs into one CNAME.
+jq -r '
+  .ResourceRecordSets
+  | unique_by(.Name)
+  | .[]
+  | if .ResourceRecords then
+      . as $parent | .ResourceRecords[] |
+      $parent.Name + " " + ($parent.TTL|tostring) + " IN " + $parent.Type + " " + .Value
+    else
+      # Converts AWS Aliases to standard CNAMEs
+      .Name + " 300 IN CNAME " + .AliasTarget.DNSName
+    end
+' "$R53JSONFILE" > "$OUTPUT_FILE"
+
+echo -e "${GREEN}✔${NC} ${BOLD}Zone file created:${NC} $OUTPUT_FILE"
+
+# 3. Detect Unusual Circumstances (Advanced Routing, Health Checks, or Aliases)
+ALIAS_RECORDS=$(jq -r '.ResourceRecordSets[] | select(.AliasTarget) | "- " + .Name + " -> CNAME to: " + .AliasTarget.DNSName' "$R53JSONFILE" | sort -u)
+ADVANCED_LOGIC=$(jq -r '.ResourceRecordSets[] | select(.Weight or .Region or .GeoLocation or .MultiValueAnswer or .HealthCheckId) | "- " + .Name + " (" + .Type + ") uses AWS Advanced Routing/Health Checks"' "$R53JSONFILE" | sort -u)
+
+if [ -n "$ALIAS_RECORDS" ] || [ -n "$ADVANCED_LOGIC" ]; then
+    
+    # Clean text for the report file (No ANSI codes)
+    INFO_TEXT=$(cat << EOF
+===============================================================
+MIGRATION REPORT
+Generated on: $(date)
+===============================================================
+
+AWS: CLOUDFRONT ALTERNATE DOMAIN NAMES
+If any CNAMEs below point to a CloudFront distribution, verify that
+the hostname is listed under the distribution's Alternate Domain Names.
+Requests for unlisted hostnames will return HTTP 403. This applies
+regardless of DNS provider.
+
+---------------------------------------------------------------
+CLOUDFLARE-SPECIFIC NOTES
+The sections below apply to Cloudflare. For other providers, consult
+their documentation for equivalent features.
+---------------------------------------------------------------
+
+1. ALIAS TO CNAME CONVERSIONS
+AWS Alias records were converted to standard CNAMEs.
+Cloudflare supports CNAMEs at the zone apex via CNAME Flattening.
+${ALIAS_RECORDS:-"None detected."}
+
+2. ADVANCED ROUTING & HEALTH CHECKS
+The following records use AWS-specific routing (Weighted, Geo, Failover,
+or Health Checks). They were exported as static values. Routing behavior
+must be manually recreated using Cloudflare Load Balancing or Traffic Steering.
+${ADVANCED_LOGIC:-"None detected."}
+
+3. DUAL-STACK (A + AAAA)
+Cloudflare's proxy serves both IPv4 and IPv6 from a single proxied CNAME.
+Separate A and AAAA record pairs are not required once proxied.
+===============================================================
+EOF
+)
+
+    echo -e "\n${ORANGE}${BOLD}⚠ REVIEW REQUIRED${NC}"
+    echo "$INFO_TEXT"
+
+    # File generation prompt
+    INFO_FILENAME="info-$OUTPUT_FILE"
+    echo -ne "Would you like to save this guide to ${BOLD}$INFO_FILENAME${NC}? (y/n): "
+    read -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "$INFO_TEXT" > "$INFO_FILENAME"
+        echo -e "${GREEN}✔${NC} ${BOLD}Migration guide saved to:${NC} $INFO_FILENAME"
+    fi
+fi
